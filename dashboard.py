@@ -9,6 +9,8 @@ from datetime import datetime
 import numpy as np
 import time
 import io
+import requests
+import tempfile
 
 class JewelryShopDashboard:
     def __init__(self, root):
@@ -21,6 +23,7 @@ class JewelryShopDashboard:
         
         self.registration_dialog = None
         self.detected_faces = []
+        self.api_url = "http://localhost:5000/predict"  # Local API endpoint
         
         self.main_container = ttk.Frame(root)
         self.main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -43,7 +46,6 @@ class JewelryShopDashboard:
             self.conn = sqlite3.connect('jewelry_shop.db')
             cursor = self.conn.cursor()
             
-            # Customers table (unchanged)
             cursor.execute("""
                 SELECT name FROM sqlite_master 
                 WHERE type='table' AND name='customers'
@@ -60,7 +62,6 @@ class JewelryShopDashboard:
                     )
                 """)
             
-            # Purchases table (add product_image column)
             cursor.execute("""
                 SELECT name FROM sqlite_master 
                 WHERE type='table' AND name='purchases'
@@ -73,13 +74,12 @@ class JewelryShopDashboard:
                         product_id TEXT,
                         product_name TEXT,
                         product_price REAL,
-                        product_image BLOB,  -- New column for storing image
+                        product_image BLOB,
                         purchase_time DATETIME,
                         FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
                     )
                 """)
             else:
-                # Add product_image column if table already exists but column is missing
                 cursor.execute("PRAGMA table_info(purchases)")
                 columns = [col[1] for col in cursor.fetchall()]
                 if 'product_image' not in columns:
@@ -714,10 +714,9 @@ class JewelryShopDashboard:
             messagebox.showinfo("Info", f"{customer_name} has already been marked as exited")
             return
         
-        # Show purchase dialog
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Exit Details for {customer_name}")
-        dialog.geometry("400x400")  # Increased height to accommodate image upload
+        dialog.geometry("400x400")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -731,13 +730,11 @@ class JewelryShopDashboard:
         form_frame = ttk.LabelFrame(dialog, text="Purchase Information", padding=10)
         form_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Purchase Yes/No
         ttk.Label(form_frame, text="Did the customer make a purchase?").grid(row=0, column=0, columnspan=2, pady=5)
         purchase_var = tk.StringVar(value="No")
         ttk.Radiobutton(form_frame, text="Yes", variable=purchase_var, value="Yes").grid(row=1, column=0, pady=5)
         ttk.Radiobutton(form_frame, text="No", variable=purchase_var, value="No").grid(row=1, column=1, pady=5)
         
-        # Purchase details (initially hidden)
         purchase_frame = ttk.Frame(form_frame)
         purchase_frame.grid(row=2, column=0, columnspan=2, pady=5, sticky='ew')
         
@@ -753,7 +750,6 @@ class JewelryShopDashboard:
         product_price_var = tk.StringVar()
         ttk.Entry(purchase_frame, textvariable=product_price_var).grid(row=2, column=1, sticky='ew', pady=5)
         
-        # Image upload
         ttk.Label(purchase_frame, text="Product Image:").grid(row=3, column=0, sticky='e', pady=5)
         image_path_var = tk.StringVar()
         ttk.Entry(purchase_frame, textvariable=image_path_var, state='readonly').grid(row=3, column=1, sticky='ew', pady=5)
@@ -766,13 +762,12 @@ class JewelryShopDashboard:
                 purchase_frame.grid_remove()
         
         purchase_var.trace('w', lambda *args: toggle_purchase_details())
-        toggle_purchase_details()  # Initial state
+        toggle_purchase_details()
         
         def submit_exit():
             try:
                 cursor = self.conn.cursor()
                 
-                # Update exit time
                 cursor.execute("""
                     UPDATE customers 
                     SET exit_time = datetime('now')
@@ -780,7 +775,6 @@ class JewelryShopDashboard:
                 """, (customer_id,))
                 
                 if purchase_var.get() == "Yes":
-                    # Validate purchase details
                     product_id = product_id_var.get().strip()
                     product_name = product_name_var.get().strip()
                     product_price = product_price_var.get().strip()
@@ -796,13 +790,11 @@ class JewelryShopDashboard:
                         messagebox.showwarning("Warning", "Price must be a number")
                         return
                     
-                    # Load image if provided
                     product_image = None
                     if image_path:
                         with open(image_path, 'rb') as f:
                             product_image = f.read()
                     
-                    # Insert purchase record with image
                     cursor.execute("""
                         INSERT INTO purchases 
                         (customer_id, product_id, product_name, product_price, product_image, purchase_time)
@@ -842,29 +834,35 @@ class JewelryShopDashboard:
     def view_image(self, image_data):
         """Display the product image in a new window"""
         try:
+            if not image_data:
+                messagebox.showinfo("Info", "No image data available")
+                return
+                
             # Convert BLOB to image
             img = Image.open(io.BytesIO(image_data))
-            img = img.resize((300, 300), Image.Resampling.LANCZOS)  # Resize for display
+            img = img.resize((300, 300), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             
-            # Create a new window
+            # Create and configure the image window
             img_window = tk.Toplevel(self.root)
             img_window.title("Product Image")
             img_window.geometry("350x350")
             img_window.transient(self.root)
             img_window.grab_set()
             
-            ttk.Label(img_window, image=photo).pack(pady=10)
-            img_window.image = photo  # Keep a reference to avoid garbage collection
+            # Display the image
+            label = ttk.Label(img_window, image=photo)
+            label.image = photo  # Keep a reference to prevent garbage collection
+            label.pack(pady=10)
             
             ttk.Button(img_window, text="Close", command=img_window.destroy).pack(pady=5)
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to display image: {e}")
-            print(f"Image display error: {e}")
+            print(f"Image display error: {str(e)}")
+            messagebox.showerror("Error", f"Failed to display image: {str(e)}")
 
     def show_past_records(self):
-        """Show past records for selected customer including purchase details and images"""
+        """Show past records for selected customer including purchase details, images, and generate option"""
         selected_item = self.tree.selection()
         if not selected_item:
             messagebox.showwarning("Warning", "Please select a customer to view past records")
@@ -875,7 +873,7 @@ class JewelryShopDashboard:
         try:
             dialog = tk.Toplevel(self.root)
             dialog.title(f"Past Records for {customer_name}")
-            dialog.geometry("900x500")  # Increased width for new column
+            dialog.geometry("1000x500")
             dialog.transient(self.root)
             dialog.grab_set()
             
@@ -889,7 +887,7 @@ class JewelryShopDashboard:
             records_frame = ttk.LabelFrame(dialog, text=f"Visit History for {customer_name}", padding=10)
             records_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             
-            columns = ('Visit #', 'Entry Time', 'Exit Time', 'Duration', 'Product ID', 'Product', 'Price', 'Product Image')
+            columns = ('Visit #', 'Entry Time', 'Exit Time', 'Duration', 'Product ID', 'Product', 'Price', 'Product Image', 'Generate')
             records_tree = ttk.Treeview(records_frame, columns=columns, show='headings')
             
             records_tree.heading('Visit #', text='Visit #')
@@ -900,6 +898,7 @@ class JewelryShopDashboard:
             records_tree.heading('Product', text='Product')
             records_tree.heading('Price', text='Price ($)')
             records_tree.heading('Product Image', text='Product Image')
+            records_tree.heading('Generate', text='Generate')
             
             records_tree.column('Visit #', width=60)
             records_tree.column('Entry Time', width=150)
@@ -909,6 +908,7 @@ class JewelryShopDashboard:
             records_tree.column('Product', width=120)
             records_tree.column('Price', width=80)
             records_tree.column('Product Image', width=100)
+            records_tree.column('Generate', width=100)
             
             scrollbar = ttk.Scrollbar(records_frame, orient=tk.VERTICAL, command=records_tree.yview)
             records_tree.configure(yscrollcommand=scrollbar.set)
@@ -952,19 +952,19 @@ class JewelryShopDashboard:
                         exit_str = "-"
                         duration_str = "In Progress"
                     
-                    # Handle purchase details
                     if product_id is None and product_name is None and product_price is None:
                         product_id_display = "-"
                         product_name_display = "-"
                         product_price_display = "-"
                         image_display = "-"
+                        generate_display = "-"
                     else:
                         product_id_display = product_id if product_id else "-"
                         product_name_display = product_name if product_name else "-"
                         product_price_display = f"${product_price:.2f}" if product_price is not None else "-"
                         image_display = "View" if product_image else "-"
+                        generate_display = "Generate" if product_image else "-"
                     
-                    # Insert record
                     item_id = records_tree.insert('', 'end', values=(
                         visit_count,
                         entry_str,
@@ -973,22 +973,37 @@ class JewelryShopDashboard:
                         product_id_display,
                         product_name_display,
                         product_price_display,
-                        image_display
+                        image_display,
+                        generate_display
                     ))
                     
-                    # If there's an image, bind a button-like behavior
+                    # Store image data in the item for later use
                     if product_image:
-                        records_tree.tag_configure(f'view_{customer_id}', foreground='blue')
-                        records_tree.item(item_id, tags=(f'view_{customer_id}',))
-                        records_tree.tag_bind(
-                            f'view_{customer_id}',
-                            '<Button-1>',
-                            lambda e, img=product_image: self.view_image(img)
-                        )
-                
+                        records_tree.set(item_id, 'Product Image', "View")
+                        records_tree.set(item_id, 'Generate', "Generate")
+                        records_tree.item(item_id, tags=('has_image',))
+                    
                 except Exception as e:
                     print(f"Error processing record {customer_id}: {e}")
                     continue
+            
+            def on_tree_click(event):
+                item = records_tree.identify_row(event.y)
+                if not item:
+                    return
+                
+                column = records_tree.identify_column(event.x)
+                if column == '#8' and records_tree.item(item, 'values')[7] == "View":  # Product Image column
+                    customer_id = records[records_tree.index(item)][0]
+                    product_image = records[records_tree.index(item)][7]
+                    self.view_image(product_image)
+                elif column == '#9' and records_tree.item(item, 'values')[8] == "Generate":  # Generate column
+                    customer_id = records[records_tree.index(item)][0]
+                    product_image = records[records_tree.index(item)][7]
+                    self.generate_image_from_api(product_image)
+            
+            records_tree.tag_configure('has_image', foreground='blue')
+            records_tree.bind('<Button-1>', on_tree_click)
             
             ttk.Button(
                 dialog,
@@ -999,6 +1014,55 @@ class JewelryShopDashboard:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to show past records: {e}")
             print(f"Past records error: {e}")
+
+    def generate_image_from_api(self, image_data):
+        """Call the Flask API to generate an image and display it"""
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                temp_path = temp_file.name
+                temp_file.write(image_data)
+            
+            files = {'image': open(temp_path, 'rb')}
+            api_url = "http://127.0.0.1:5000/predict"
+            response = requests.post(api_url, files=files, timeout=10)
+            
+            os.unlink(temp_path)
+            
+            if response.status_code != 200:
+                raise Exception(f"API request failed: {response.json().get('error', 'Unknown error')}")
+            
+            result = response.json()
+            generated_image_url = result['generated_image']
+            
+            image_response = requests.get(generated_image_url, timeout=10)
+            if image_response.status_code != 200:
+                raise Exception("Failed to download generated image")
+            
+            img = Image.open(io.BytesIO(image_response.content))
+            img = img.resize((300, 300), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            img_window = tk.Toplevel(self.root)
+            img_window.title("Generated Image")
+            img_window.geometry("350x350")
+            img_window.transient(self.root)
+            img_window.grab_set()
+            
+            label = ttk.Label(img_window, image=photo)
+            label.pack(pady=10)
+            label.image = photo
+            
+            ttk.Button(img_window, text="Close", command=img_window.destroy).pack(pady=5)
+            
+            if 'analysis' in result:
+                messagebox.showinfo("Analysis", f"API Analysis: {result['analysis']}")
+                
+        except requests.ConnectionError as e:
+            messagebox.showerror("Error", "Cannot connect to the API. Ensure api.py is running on port 5000.")
+            print(f"Generate image error: {e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate image: {e}")
+            print(f"Generate image error: {e}")
 
 def main():
     root = tk.Tk()
