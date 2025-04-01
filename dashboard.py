@@ -13,8 +13,6 @@ import requests
 import tempfile
 from gradio_client import Client, handle_file
 import webbrowser
-import os
-import uuid
 
 class JewelryShopDashboard:
     def __init__(self, root):
@@ -38,6 +36,7 @@ class JewelryShopDashboard:
         self.right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
         
         self.setup_database()
+        self.setup_inventory_database()
         self.create_camera_frame()
         self.setup_camera()
         self.create_customer_list()
@@ -92,6 +91,47 @@ class JewelryShopDashboard:
                 
         except Exception as e:
             messagebox.showerror("Database Error", f"Failed to setup database: {e}")
+
+    def setup_inventory_database(self):
+        """Setup inventory database"""
+        try:
+            self.inventory_conn = sqlite3.connect('jewelry_inventory.db')
+            cursor = self.inventory_conn.cursor()
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS inventory (
+                    product_id TEXT PRIMARY KEY,
+                    product_name TEXT NOT NULL,
+                    product_image BLOB,
+                    price REAL NOT NULL,
+                    quantity INTEGER NOT NULL
+                )
+            """)
+            
+            # Check if table is empty and populate with sample data if needed
+            cursor.execute("SELECT COUNT(*) FROM inventory")
+            if cursor.fetchone()[0] == 0:
+                sample_items = [
+                    ('J001', 'Gold Necklace', 'jewel1.jpg', 599.99, 5),
+                    ('J002', 'Diamond Ring', None, 1299.99, 3),
+                    ('J003', 'Silver Bracelet', None, 199.99, 8),
+                    ('J004', 'Pearl Earrings', None, 149.99, 6),
+                    ('J005', 'Emerald Pendant', None, 799.99, 4),
+                    ('J006', 'Ruby Ring', None, 999.99, 2),
+                    ('J007', 'Sapphire Bracelet', None, 399.99, 7),
+                    ('J008', 'Gold Chain', None, 349.99, 5),
+                    ('J009', 'Diamond Studs', None, 699.99, 3),
+                    ('J010', 'Silver Anklet', None, 99.99, 10)
+                ]
+                cursor.executemany("""
+                    INSERT INTO inventory (product_id, product_name, product_image, price, quantity)
+                    VALUES (?, ?, ?, ?, ?)
+                """, sample_items)
+            
+            self.inventory_conn.commit()
+                
+        except Exception as e:
+            messagebox.showerror("Inventory Database Error", f"Failed to setup inventory database: {e}")
 
     def setup_camera(self):
         """Setup camera and face detection"""
@@ -192,7 +232,7 @@ class JewelryShopDashboard:
         self.register_button.pack(side=tk.LEFT, padx=5)
 
     def create_customer_list(self):
-        """Create customer list with edit, delete, exit, and past records buttons"""
+        """Create customer list with edit, delete, exit, past records, and show inventory buttons"""
         list_container = ttk.LabelFrame(self.right_panel, text="Customer Records")
         list_container.pack(fill=tk.BOTH, expand=True, pady=5)
         
@@ -227,6 +267,7 @@ class JewelryShopDashboard:
         style.configure('Delete.TButton', background='#f44336')
         style.configure('Exit.TButton', background='#FF9800')
         style.configure('Records.TButton', background='#2196F3')
+        style.configure('Inventory.TButton', background='#9C27B0')  # Purple for Show Inventory
         
         ttk.Button(
             buttons_frame, 
@@ -247,6 +288,13 @@ class JewelryShopDashboard:
             text="Past Records", 
             style='Records.TButton',
             command=self.show_past_records
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            buttons_frame, 
+            text="Show Inventory", 
+            style='Inventory.TButton',
+            command=self.show_inventory  # New button
         ).pack(side=tk.LEFT, padx=5)
         
         ttk.Button(
@@ -703,7 +751,7 @@ class JewelryShopDashboard:
         dialog.protocol("WM_DELETE_WINDOW", close_dialog)
 
     def exit_customer(self):
-        """Mark selected customer as exited and record purchase details with image"""
+        """Mark selected customer as exited and record purchase details with inventory integration"""
         selected_item = self.tree.selection()
         if not selected_item:
             messagebox.showwarning("Warning", "Please select a customer to mark as exited")
@@ -719,7 +767,7 @@ class JewelryShopDashboard:
         
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Exit Details for {customer_name}")
-        dialog.geometry("400x400")
+        dialog.geometry("400x500")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -730,8 +778,11 @@ class JewelryShopDashboard:
         y = (dialog.winfo_screenheight() // 2) - (height // 2)
         dialog.geometry(f'+{x}+{y}')
         
-        form_frame = ttk.LabelFrame(dialog, text="Purchase Information", padding=10)
-        form_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        main_frame = ttk.Frame(dialog)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        form_frame = ttk.LabelFrame(main_frame, text="Purchase Information", padding=10)
+        form_frame.pack(fill=tk.BOTH, expand=True)
         
         ttk.Label(form_frame, text="Did the customer make a purchase?").grid(row=0, column=0, columnspan=2, pady=5)
         purchase_var = tk.StringVar(value="No")
@@ -741,35 +792,100 @@ class JewelryShopDashboard:
         purchase_frame = ttk.Frame(form_frame)
         purchase_frame.grid(row=2, column=0, columnspan=2, pady=5, sticky='ew')
         
+        # Fetch available product IDs
+        try:
+            cursor = self.inventory_conn.cursor()
+            cursor.execute("SELECT product_id FROM inventory WHERE quantity > 0")
+            available_products = [row[0] for row in cursor.fetchall()]
+            if not available_products:
+                available_products = ["No products available"]
+        except Exception as e:
+            print(f"Error fetching product IDs: {e}")
+            available_products = ["Error loading products"]
+        
         ttk.Label(purchase_frame, text="Product ID:").grid(row=0, column=0, sticky='e', pady=5)
         product_id_var = tk.StringVar()
-        ttk.Entry(purchase_frame, textvariable=product_id_var).grid(row=0, column=1, sticky='ew', pady=5)
+        product_id_combo = ttk.Combobox(purchase_frame, textvariable=product_id_var, values=available_products, state="readonly")
+        product_id_combo.grid(row=0, column=1, sticky='ew', pady=5)
+        if available_products[0] != "No products available" and available_products[0] != "Error loading products":
+            product_id_combo.set(available_products[0])  # Set default to first available product
         
         ttk.Label(purchase_frame, text="Product Name:").grid(row=1, column=0, sticky='e', pady=5)
         product_name_var = tk.StringVar()
-        ttk.Entry(purchase_frame, textvariable=product_name_var).grid(row=1, column=1, sticky='ew', pady=5)
+        ttk.Label(purchase_frame, textvariable=product_name_var).grid(row=1, column=1, sticky='w', pady=5)
         
-        ttk.Label(purchase_frame, text="Product Price:").grid(row=2, column=0, sticky='e', pady=5)
+        ttk.Label(purchase_frame, text="Price:").grid(row=2, column=0, sticky='e', pady=5)
         product_price_var = tk.StringVar()
-        ttk.Entry(purchase_frame, textvariable=product_price_var).grid(row=2, column=1, sticky='ew', pady=5)
+        ttk.Label(purchase_frame, textvariable=product_price_var).grid(row=2, column=1, sticky='w', pady=5)
         
-        ttk.Label(purchase_frame, text="Product Image:").grid(row=3, column=0, sticky='e', pady=5)
-        image_path_var = tk.StringVar()
-        ttk.Entry(purchase_frame, textvariable=image_path_var, state='readonly').grid(row=3, column=1, sticky='ew', pady=5)
-        ttk.Button(purchase_frame, text="Upload Image", command=lambda: self.upload_image(image_path_var)).grid(row=3, column=2, padx=5)
+        image_label = ttk.Label(purchase_frame)
+        image_label.grid(row=3, column=0, columnspan=2, pady=5)
+        
+        def update_product_details(*args):
+            product_id = product_id_var.get().strip()
+            if product_id and product_id not in ["No products available", "Error loading products"]:
+                try:
+                    cursor = self.inventory_conn.cursor()
+                    cursor.execute("""
+                        SELECT product_name, price, quantity, product_image 
+                        FROM inventory 
+                        WHERE product_id = ?
+                    """, (product_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        product_name_var.set(result[0])
+                        product_price_var.set(f"${result[1]:.2f}")
+                        if result[2] <= 0:
+                            messagebox.showwarning("Warning", "This product is out of stock!")
+                        
+                        if result[3]:
+                            print(f"Image data for {product_id}: {len(result[3])} bytes")
+                            img = Image.open(io.BytesIO(result[3]))
+                            img = img.resize((150, 150), Image.Resampling.LANCZOS)
+                            photo = ImageTk.PhotoImage(img)
+                            image_label.config(image=photo)
+                            image_label.image = photo
+                        else:
+                            print(f"No image data for {product_id}")
+                            image_label.config(image=None, text="No image available")
+                    else:
+                        product_name_var.set("Not found")
+                        product_price_var.set("N/A")
+                        image_label.config(image=None, text="Product not found")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to fetch product details: {e}")
+                    print(f"Error fetching product details for {product_id}: {e}")
+                    image_label.config(image=None, text="Error loading image")
+            else:
+                product_name_var.set("")
+                product_price_var.set("")
+                image_label.config(image=None, text="")
+        
+        product_id_var.trace('w', update_product_details)
+        # Trigger initial update if a default product is set
+        if product_id_var.get():
+            update_product_details()
         
         def toggle_purchase_details():
             if purchase_var.get() == "Yes":
                 purchase_frame.grid()
             else:
                 purchase_frame.grid_remove()
+                image_label.config(image=None, text="")
         
         purchase_var.trace('w', lambda *args: toggle_purchase_details())
         toggle_purchase_details()
         
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+        
+        ttk.Button(button_frame, text="Submit", command=lambda: submit_exit()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        
         def submit_exit():
             try:
                 cursor = self.conn.cursor()
+                inventory_cursor = self.inventory_conn.cursor()
                 
                 cursor.execute("""
                     UPDATE customers 
@@ -779,32 +895,41 @@ class JewelryShopDashboard:
                 
                 if purchase_var.get() == "Yes":
                     product_id = product_id_var.get().strip()
-                    product_name = product_name_var.get().strip()
-                    product_price = product_price_var.get().strip()
-                    image_path = image_path_var.get().strip()
-                    
-                    if not all([product_id, product_name, product_price]):
-                        messagebox.showwarning("Warning", "Please fill all purchase details")
+                    if not product_id or product_id in ["No products available", "Error loading products"]:
+                        messagebox.showwarning("Warning", "Please select a valid Product ID")
                         return
                     
-                    try:
-                        product_price = float(product_price)
-                    except ValueError:
-                        messagebox.showwarning("Warning", "Price must be a number")
+                    inventory_cursor.execute("""
+                        SELECT product_name, price, quantity, product_image
+                        FROM inventory 
+                        WHERE product_id = ?
+                    """, (product_id,))
+                    product_details = inventory_cursor.fetchone()
+                    
+                    if not product_details:
+                        messagebox.showwarning("Warning", "Invalid Product ID")
                         return
                     
-                    product_image = None
-                    if image_path:
-                        with open(image_path, 'rb') as f:
-                            product_image = f.read()
+                    if product_details[2] <= 0:
+                        messagebox.showwarning("Warning", "Product is out of stock")
+                        return
+                    
+                    product_name, product_price, quantity, product_image = product_details
                     
                     cursor.execute("""
                         INSERT INTO purchases 
                         (customer_id, product_id, product_name, product_price, product_image, purchase_time)
                         VALUES (?, ?, ?, ?, ?, datetime('now'))
                     """, (customer_id, product_id, product_name, product_price, product_image))
+                    
+                    inventory_cursor.execute("""
+                        UPDATE inventory 
+                        SET quantity = quantity - 1
+                        WHERE product_id = ?
+                    """, (product_id,))
                 
                 self.conn.commit()
+                self.inventory_conn.commit()
                 
                 if cursor.rowcount > 0:
                     messagebox.showinfo("Success", f"Successfully marked {customer_name} as exited")
@@ -817,12 +942,6 @@ class JewelryShopDashboard:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to process exit: {e}")
                 print(f"Exit error: {e}")
-        
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Button(button_frame, text="Submit", command=submit_exit).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
 
     def upload_image(self, image_path_var):
         """Upload an image file and set its path to the variable"""
@@ -841,21 +960,18 @@ class JewelryShopDashboard:
                 messagebox.showinfo("Info", "No image data available")
                 return
                 
-            # Convert BLOB to image
             img = Image.open(io.BytesIO(image_data))
             img = img.resize((300, 300), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             
-            # Create and configure the image window
             img_window = tk.Toplevel(self.root)
             img_window.title("Product Image")
             img_window.geometry("350x350")
             img_window.transient(self.root)
             img_window.grab_set()
             
-            # Display the image
             label = ttk.Label(img_window, image=photo)
-            label.image = photo  # Keep a reference to prevent garbage collection
+            label.image = photo
             label.pack(pady=10)
             
             ttk.Button(img_window, text="Close", command=img_window.destroy).pack(pady=5)
@@ -980,7 +1096,6 @@ class JewelryShopDashboard:
                         generate_display
                     ))
                     
-                    # Store image data in the item for later use
                     if product_image:
                         records_tree.set(item_id, 'Product Image', "View")
                         records_tree.set(item_id, 'Generate', "Generate")
@@ -996,11 +1111,11 @@ class JewelryShopDashboard:
                     return
                 
                 column = records_tree.identify_column(event.x)
-                if column == '#8' and records_tree.item(item, 'values')[7] == "View":  # Product Image column
+                if column == '#8' and records_tree.item(item, 'values')[7] == "View":
                     customer_id = records[records_tree.index(item)][0]
                     product_image = records[records_tree.index(item)][7]
                     self.view_image(product_image)
-                elif column == '#9' and records_tree.item(item, 'values')[8] == "Generate":  # Generate column
+                elif column == '#9' and records_tree.item(item, 'values')[8] == "Generate":
                     customer_id = records[records_tree.index(item)][0]
                     product_image = records[records_tree.index(item)][7]
                     self.generate_image_from_gradio(product_image)
@@ -1025,28 +1140,77 @@ class JewelryShopDashboard:
                 raise ValueError("No image data provided")
             print(f"Image data type: {type(image_data)}, length: {len(image_data)}")
 
-            # Save the image to a temporary file
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
                 temp_path = temp_file.name
-                temp_file.write(image_data)  # Ensure image_data is binary
+                temp_file.write(image_data)
 
-            # Open the Hugging Face Space URL in the default browser
             huggingface_url = "https://huggingface.co/spaces/auzalfred/Jewelry_Design_Gen"
             webbrowser.open(huggingface_url)
 
-            # Inform the user about the image location
             messagebox.showinfo(
                 "Redirecting",
                 f"The browser has been opened to {huggingface_url}.\n"
                 f"Please manually upload the image located at:\n{temp_path}"
             )
 
-            # Note: The temp file won't be deleted automatically to allow manual upload.
-            # You could add a cleanup mechanism if desired.
-
         except Exception as e:
             messagebox.showerror("Error", f"Failed to process redirection: {e}")
             print(f"Redirection error: {e}")
+
+    def show_inventory(self):
+        """Show current inventory with Product ID and Quantity"""
+        try:
+            # Create a new window
+            inventory_dialog = tk.Toplevel(self.root)
+            inventory_dialog.title("Current Inventory")
+            inventory_dialog.geometry("400x400")
+            inventory_dialog.transient(self.root)
+            inventory_dialog.grab_set()
+            
+            inventory_dialog.update_idletasks()
+            width = inventory_dialog.winfo_width()
+            height = inventory_dialog.winfo_height()
+            x = (inventory_dialog.winfo_screenwidth() // 2) - (width // 2)
+            y = (inventory_dialog.winfo_screenheight() // 2) - (height // 2)
+            inventory_dialog.geometry(f'+{x}+{y}')
+            
+            # Frame for the inventory table
+            inventory_frame = ttk.LabelFrame(inventory_dialog, text="Inventory Items", padding=10)
+            inventory_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            # Treeview for inventory
+            columns = ('Product ID', 'Quantity')
+            inventory_tree = ttk.Treeview(inventory_frame, columns=columns, show='headings')
+            
+            inventory_tree.heading('Product ID', text='Product ID')
+            inventory_tree.heading('Quantity', text='Quantity')
+            
+            inventory_tree.column('Product ID', width=150)
+            inventory_tree.column('Quantity', width=100)
+            
+            scrollbar = ttk.Scrollbar(inventory_frame, orient=tk.VERTICAL, command=inventory_tree.yview)
+            inventory_tree.configure(yscrollcommand=scrollbar.set)
+            
+            inventory_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            # Fetch and display inventory data
+            cursor = self.inventory_conn.cursor()
+            cursor.execute("SELECT product_id, quantity FROM inventory ORDER BY product_id")
+            inventory_items = cursor.fetchall()
+            
+            for product_id, quantity in inventory_items:
+                inventory_tree.insert('', 'end', values=(product_id, quantity))
+            
+            # Close button
+            button_frame = ttk.Frame(inventory_dialog)
+            button_frame.pack(fill=tk.X, pady=10)
+            
+            ttk.Button(button_frame, text="Close", command=inventory_dialog.destroy).pack(side=tk.LEFT, padx=5)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to show inventory: {e}")
+            print(f"Inventory display error: {e}")        
 
 def main():
     root = tk.Tk()
