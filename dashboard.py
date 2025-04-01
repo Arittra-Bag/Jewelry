@@ -11,6 +11,7 @@ import time
 import io
 import requests
 import tempfile
+from gradio_client import Client, handle_file
 
 class JewelryShopDashboard:
     def __init__(self, root):
@@ -23,7 +24,6 @@ class JewelryShopDashboard:
         
         self.registration_dialog = None
         self.detected_faces = []
-        self.api_url = "http://localhost:5000/predict"  # Local API endpoint
         
         self.main_container = ttk.Frame(root)
         self.main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -1000,7 +1000,7 @@ class JewelryShopDashboard:
                 elif column == '#9' and records_tree.item(item, 'values')[8] == "Generate":  # Generate column
                     customer_id = records[records_tree.index(item)][0]
                     product_image = records[records_tree.index(item)][7]
-                    self.generate_image_from_api(product_image)
+                    self.generate_image_from_gradio(product_image)
             
             records_tree.tag_configure('has_image', foreground='blue')
             records_tree.bind('<Button-1>', on_tree_click)
@@ -1015,33 +1015,48 @@ class JewelryShopDashboard:
             messagebox.showerror("Error", f"Failed to show past records: {e}")
             print(f"Past records error: {e}")
 
-    def generate_image_from_api(self, image_data):
-        """Call the Flask API to generate an image and display it"""
+    def generate_image_from_gradio(self, image_data):
+        """Call the Gradio client to generate an image and display it"""
         try:
+            # Debug: Check the image data
+            if not image_data:
+                raise ValueError("No image data provided")
+            print(f"Image data type: {type(image_data)}, length: {len(image_data)}")
+
+            # Initialize Gradio Client when needed
+            gradio_client = Client("auzalfred/Jewelry_Design_Gen")
+
+            # Write the image data to a temporary file
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
                 temp_path = temp_file.name
-                temp_file.write(image_data)
+                temp_file.write(image_data)  # Ensure image_data is in binary format
             
-            files = {'image': open(temp_path, 'rb')}
-            api_url = "http://127.0.0.1:5000/predict"
-            response = requests.post(api_url, files=files, timeout=10)
+            # Use Gradio client to call the API
+            result = gradio_client.predict(
+                image=handle_file(temp_path),
+                api_name="/process_and_generate"
+            )
             
             os.unlink(temp_path)
             
-            if response.status_code != 200:
-                raise Exception(f"API request failed: {response.json().get('error', 'Unknown error')}")
-            
-            result = response.json()
-            generated_image_url = result['generated_image']
-            
+            # Validate the result
+            if not result or len(result) < 2:
+                raise ValueError("Invalid response from Gradio app")
+
+            analysis_text = result[0]
+            generated_image_url = result[1]
+
+            # Fetch the generated image
             image_response = requests.get(generated_image_url, timeout=10)
             if image_response.status_code != 200:
                 raise Exception("Failed to download generated image")
             
-            img = Image.open(io.BytesIO(image_response.content))
+            # Handle webp format and convert to a displayable format
+            img = Image.open(io.BytesIO(image_response.content)).convert("RGB")
             img = img.resize((300, 300), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             
+            # Display the generated image in a new window
             img_window = tk.Toplevel(self.root)
             img_window.title("Generated Image")
             img_window.geometry("350x350")
@@ -1050,16 +1065,14 @@ class JewelryShopDashboard:
             
             label = ttk.Label(img_window, image=photo)
             label.pack(pady=10)
-            label.image = photo
+            label.image = photo  # Keep a reference to prevent garbage collection
             
             ttk.Button(img_window, text="Close", command=img_window.destroy).pack(pady=5)
             
-            if 'analysis' in result:
-                messagebox.showinfo("Analysis", f"API Analysis: {result['analysis']}")
+            # Display the analysis text
+            if analysis_text:
+                messagebox.showinfo("Analysis", f"API Analysis: {analysis_text}")
                 
-        except requests.ConnectionError as e:
-            messagebox.showerror("Error", "Cannot connect to the API. Ensure api.py is running on port 5000.")
-            print(f"Generate image error: {e}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate image: {e}")
             print(f"Generate image error: {e}")
