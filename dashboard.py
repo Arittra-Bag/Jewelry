@@ -12,6 +12,9 @@ import io
 import requests
 import tempfile
 from gradio_client import Client, handle_file
+import webbrowser
+import os
+import uuid
 
 class JewelryShopDashboard:
     def __init__(self, root):
@@ -1016,66 +1019,34 @@ class JewelryShopDashboard:
             print(f"Past records error: {e}")
 
     def generate_image_from_gradio(self, image_data):
-        """Call the Gradio client to generate an image and display it"""
+        """Redirect to Hugging Face Space with the purchased image"""
         try:
-            # Debug: Check the image data
             if not image_data:
                 raise ValueError("No image data provided")
             print(f"Image data type: {type(image_data)}, length: {len(image_data)}")
 
-            # Initialize Gradio Client when needed
-            gradio_client = Client("auzalfred/Jewelry_Design_Gen")
-
-            # Write the image data to a temporary file
+            # Save the image to a temporary file
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
                 temp_path = temp_file.name
-                temp_file.write(image_data)  # Ensure image_data is in binary format
-            
-            # Use Gradio client to call the API
-            result = gradio_client.predict(
-                image=handle_file(temp_path),
-                api_name="/process_and_generate"
+                temp_file.write(image_data)  # Ensure image_data is binary
+
+            # Open the Hugging Face Space URL in the default browser
+            huggingface_url = "https://huggingface.co/spaces/auzalfred/Jewelry_Design_Gen"
+            webbrowser.open(huggingface_url)
+
+            # Inform the user about the image location
+            messagebox.showinfo(
+                "Redirecting",
+                f"The browser has been opened to {huggingface_url}.\n"
+                f"Please manually upload the image located at:\n{temp_path}"
             )
-            
-            os.unlink(temp_path)
-            
-            # Validate the result
-            if not result or len(result) < 2:
-                raise ValueError("Invalid response from Gradio app")
 
-            analysis_text = result[0]
-            generated_image_url = result[1]
+            # Note: The temp file won't be deleted automatically to allow manual upload.
+            # You could add a cleanup mechanism if desired.
 
-            # Fetch the generated image
-            image_response = requests.get(generated_image_url, timeout=10)
-            if image_response.status_code != 200:
-                raise Exception("Failed to download generated image")
-            
-            # Handle webp format and convert to a displayable format
-            img = Image.open(io.BytesIO(image_response.content)).convert("RGB")
-            img = img.resize((300, 300), Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
-            
-            # Display the generated image in a new window
-            img_window = tk.Toplevel(self.root)
-            img_window.title("Generated Image")
-            img_window.geometry("350x350")
-            img_window.transient(self.root)
-            img_window.grab_set()
-            
-            label = ttk.Label(img_window, image=photo)
-            label.pack(pady=10)
-            label.image = photo  # Keep a reference to prevent garbage collection
-            
-            ttk.Button(img_window, text="Close", command=img_window.destroy).pack(pady=5)
-            
-            # Display the analysis text
-            if analysis_text:
-                messagebox.showinfo("Analysis", f"API Analysis: {analysis_text}")
-                
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to generate image: {e}")
-            print(f"Generate image error: {e}")
+            messagebox.showerror("Error", f"Failed to process redirection: {e}")
+            print(f"Redirection error: {e}")
 
 def main():
     root = tk.Tk()
