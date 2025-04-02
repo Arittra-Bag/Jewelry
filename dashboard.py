@@ -1261,7 +1261,7 @@ class JewelryShopDashboard:
                 temp_path = temp_file.name
                 temp_file.write(image_data)
 
-            huggingface_url = "https://huggingface.co/spaces/auzalfred/Jewelry_Design_Gen"
+            huggingface_url = "http://127.0.0.1:7860/"
             webbrowser.open(huggingface_url)
 
             messagebox.showinfo(
