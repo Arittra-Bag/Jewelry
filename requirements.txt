@@ -11,3 +11,6 @@ setuptools==65.5.0
 torch==2.0.1
 torch==2.6.0
 ultralytics==8.3.97
+mtcnn==0.1.1
+dlib==19.24.0
+imutils==0.5.4

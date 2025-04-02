@@ -13,7 +13,9 @@ import requests
 import tempfile
 from gradio_client import Client, handle_file
 import webbrowser
+from mtcnn import MTCNN
 
+# Change 1
 class JewelryShopDashboard:
     def __init__(self, root):
         self.root = root
@@ -260,7 +262,7 @@ class JewelryShopDashboard:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         buttons_frame = ttk.Frame(list_container)
-        buttons_frame.pack(fill=tk.X, pady=5)
+        buttons_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
         
         style = ttk.Style()
         style.configure('Edit.TButton', background='#4CAF50')
@@ -269,40 +271,23 @@ class JewelryShopDashboard:
         style.configure('Records.TButton', background='#2196F3')
         style.configure('Inventory.TButton', background='#9C27B0')  # Purple for Show Inventory
         
-        ttk.Button(
-            buttons_frame, 
-            text="Edit Selected", 
-            style='Edit.TButton',
-            command=self.edit_customer
-        ).pack(side=tk.LEFT, padx=5)
+        # Define buttons and their commands
+        buttons = [
+            ("Edit Selected", 'Edit.TButton', self.edit_customer),
+            ("Exit Customer", 'Exit.TButton', self.exit_customer),
+            ("Past Records", 'Records.TButton', self.show_past_records),
+            ("Show Inventory", 'Inventory.TButton', self.show_inventory),
+            ("Delete Selected", 'Delete.TButton', self.delete_customer),
+        ]
         
-        ttk.Button(
-            buttons_frame, 
-            text="Exit Customer", 
-            style='Exit.TButton',
-            command=self.exit_customer
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            buttons_frame, 
-            text="Past Records", 
-            style='Records.TButton',
-            command=self.show_past_records
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            buttons_frame, 
-            text="Show Inventory", 
-            style='Inventory.TButton',
-            command=self.show_inventory  # New button
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            buttons_frame, 
-            text="Delete Selected", 
-            style='Delete.TButton',
-            command=self.delete_customer
-        ).pack(side=tk.LEFT, padx=5)
+        # Place buttons in a single column
+        for i, (text, style, command) in enumerate(buttons):
+            ttk.Button(
+                buttons_frame, 
+                text=text, 
+                style=style,
+                command=command
+            ).pack(fill=tk.X, pady=5)
         
         self.tree.bind('<Double-1>', lambda e: self.edit_customer())
 
@@ -320,6 +305,7 @@ class JewelryShopDashboard:
         ret, frame = self.cap.read()
         if ret:
             frame = cv2.resize(frame, (self.frame_width, self.frame_height))
+            self.current_frame = frame.copy()  # Store the current frame
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
             faces = self.face_cascade.detectMultiScale(
@@ -618,67 +604,194 @@ class JewelryShopDashboard:
             print(f"Edit dialog error: {e}")
 
     def on_camera_click(self, event):
-        """Handle clicks on the camera feed with automatic recognition"""
-        if not self.detected_faces:
-            messagebox.showinfo("Info", "No faces detected to register!")
+        """Handle camera click with separate flows for new and returning customers"""
+        if not hasattr(self, 'current_frame') or self.current_frame is None:
+            messagebox.showwarning("Warning", "No camera frame available")
             return
-            
+        
+        # Get click coordinates
+        click_x = event.x
+        click_y = event.y
+        
+        # Convert coordinates to original frame size
+        scale_x = self.frame_width / self.camera_canvas.winfo_width()
+        scale_y = self.frame_height / self.camera_canvas.winfo_height()
+        
+        orig_x = int(click_x * scale_x)
+        orig_y = int(click_y * scale_y)
+        
+        # Check if click is within any detected face
         for face_data in self.detected_faces:
             x, y, w, h = face_data['bbox']
-            if (x <= event.x <= x + w) and (y <= event.y <= y + h):
+            if x <= orig_x <= x + w and y <= orig_y <= y + h:
+                # First check if this face matches any existing customer
                 try:
+                    current_features = face_data['features']
                     cursor = self.conn.cursor()
+                    
+                    # Get all customers with their latest records
                     cursor.execute("""
-                        SELECT customer_id, name, face_encoding, exit_time,
-                               (SELECT COUNT(*) FROM customers c2 
-                                WHERE c2.name = c1.name) as total_visits
+                        SELECT c1.customer_id, c1.name, c1.face_encoding, c1.exit_time
                         FROM customers c1
-                        WHERE customer_id IN (
-                            SELECT MAX(customer_id) 
-                            FROM customers 
+                        WHERE c1.customer_id IN (
+                            SELECT MAX(customer_id)
+                            FROM customers
                             GROUP BY name
                         )
                     """)
                     customers = cursor.fetchall()
                     
-                    is_known = False
-                    for customer_id, name, stored_features, exit_time, total_visits in customers:
+                    # Check for existing customer match
+                    for customer_id, name, stored_features, exit_time in customers:
                         if stored_features is not None:
                             stored_features = np.frombuffer(stored_features, dtype=np.float64)
-                            if self.compare_features(face_data['features'], stored_features):
-                                is_known = True
-                                if exit_time is not None:
-                                    cursor.execute("""
-                                        SELECT customer_id FROM customers 
-                                        WHERE name = ? AND exit_time IS NULL
-                                    """, (name,))
-                                    active_entry = cursor.fetchone()
-                                    
-                                    if not active_entry:
-                                        cursor.execute("""
-                                            INSERT INTO customers 
-                                            (name, face_encoding, entry_time, visit_count)
-                                            VALUES (?, ?, datetime('now'), ?)
-                                        """, (name, stored_features, total_visits + 1))
-                                        self.conn.commit()
-                                        messagebox.showinfo("Welcome Back", 
-                                            f"Welcome back {name}!\nVisit #{total_visits + 1}")
-                                        self.load_existing_customers()
-                                    else:
-                                        messagebox.showinfo("Info", 
-                                            f"{name} is already checked in!")
+                            if self.compare_features(current_features, stored_features):
+                                if exit_time is None:
+                                    messagebox.showinfo("Already Checked In", 
+                                                      f"{name} is already checked in!")
+                                    return
                                 else:
-                                    messagebox.showinfo("Info", 
-                                        f"{name} is already checked in!")
-                                break
+                                    # Customer exists but has exited - Check in flow
+                                    if self.verify_returning_customer(face_data['img']):
+                                        self.check_in_customer(name, face_data)
+                                    return
                     
-                    if not is_known:
+                    # If no match found - New customer flow
+                    if self.verify_new_customer(face_data['img']):
                         self.show_registration_dialog(face_data)
-                        
+                    return
+                    
                 except Exception as e:
-                    messagebox.showerror("Error", f"Error processing face: {e}")
-                    print(f"Face processing error: {e}")
-                break
+                    print(f"Error checking customer: {e}")
+                    messagebox.showerror("Error", f"Failed to process face: {e}")
+                    return
+        
+        messagebox.showinfo("Info", "Please click on a detected face")
+
+    def verify_new_customer(self, face_img):
+        """Verify a new customer using MTCNN for accurate eye detection"""
+        scan_window = tk.Toplevel(self.root)
+        scan_window.title("New Customer Verification")
+        scan_window.geometry("400x300")
+        
+        # Create canvas for face display
+        canvas = tk.Canvas(scan_window, width=200, height=200, bg='black')
+        canvas.pack(pady=10)
+        
+        # Convert face image for display
+        face_display = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+        face_display = cv2.resize(face_display, (200, 200))
+        face_photo = ImageTk.PhotoImage(image=Image.fromarray(face_display))
+        canvas.create_image(100, 100, image=face_photo)
+        canvas.image = face_photo
+        
+        # Status label
+        status_label = ttk.Label(scan_window, text="Verifying...", font=('Arial', 12))
+        status_label.pack(pady=5)
+        
+        # Use MTCNN for face and landmark detection
+        detector = MTCNN()
+        rgb_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+        results = detector.detect_faces(rgb_img)
+        
+        if results:
+            # Get the first detected face
+            detection = results[0]
+            
+            # Get facial landmarks
+            landmarks = detection['keypoints']
+            
+            if 'left_eye' in landmarks and 'right_eye' in landmarks:
+                left_eye = landmarks['left_eye']
+                right_eye = landmarks['right_eye']
+                
+                # Calculate eye distance ratio
+                face_width = face_img.shape[1]
+                eye_distance = right_eye[0] - left_eye[0]
+                face_width_ratio = eye_distance / face_width
+                
+                # More lenient ratio check
+                if 0.1 <= face_width_ratio <= 0.7:
+                    status_label.config(text="Verification Successful!", foreground='green')
+                    scan_window.after(1000, scan_window.destroy)
+                    return True
+        
+        status_label.config(text="Verification Failed", foreground='red')
+        scan_window.after(1000, scan_window.destroy)
+        return False
+
+    def verify_returning_customer(self, face_img):
+        """Quick verification for returning customers using MTCNN"""
+        scan_window = tk.Toplevel(self.root)
+        scan_window.title("Welcome Back!")
+        scan_window.geometry("400x300")
+        
+        # Create canvas for face display
+        canvas = tk.Canvas(scan_window, width=200, height=200, bg='black')
+        canvas.pack(pady=10)
+        
+        # Convert face image for display
+        face_display = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+        face_display = cv2.resize(face_display, (200, 200))
+        face_photo = ImageTk.PhotoImage(image=Image.fromarray(face_display))
+        canvas.create_image(100, 100, image=face_photo)
+        canvas.image = face_photo
+        
+        # Status label
+        status_label = ttk.Label(scan_window, text="Verifying...", font=('Arial', 12))
+        status_label.pack(pady=5)
+        
+        # Use MTCNN for face and landmark detection
+        detector = MTCNN()
+        rgb_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+        results = detector.detect_faces(rgb_img)
+        
+        if results:
+            # Get the first detected face
+            detection = results[0]
+            
+            # Get facial landmarks
+            landmarks = detection['keypoints']
+            
+            if 'left_eye' in landmarks and 'right_eye' in landmarks:
+                left_eye = landmarks['left_eye']
+                right_eye = landmarks['right_eye']
+                
+                # Calculate eye distance ratio
+                face_width = face_img.shape[1]
+                eye_distance = right_eye[0] - left_eye[0]
+                face_width_ratio = eye_distance / face_width
+                
+                # More lenient ratio check
+                if 0.1 <= face_width_ratio <= 0.7:
+                    status_label.config(text="Welcome Back!", foreground='green')
+                    scan_window.after(1000, scan_window.destroy)
+                    return True
+        
+        status_label.config(text="Verification Failed", foreground='red')
+        scan_window.after(1000, scan_window.destroy)
+        return False
+
+    def check_in_customer(self, name, face_data):
+        """Check in a returning customer"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                UPDATE customers 
+                SET face_encoding = ?,
+                    entry_time = datetime('now'),
+                    exit_time = NULL,
+                    visit_count = visit_count + 1
+                WHERE name = ?
+            """, (face_data['features'].tobytes(), name))
+            
+            self.conn.commit()
+            messagebox.showinfo("Success", f"Welcome back, {name}!")
+            self.load_existing_customers()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to check in customer: {e}")
+            print(f"Check-in error: {e}")
 
     def show_registration_dialog(self, face_data):
         """Show registration dialog only for new faces"""
@@ -701,9 +814,10 @@ class JewelryShopDashboard:
         y = (dialog.winfo_screenheight() // 2) - (height // 2)
         dialog.geometry(f'+{x}+{y}')
         
+        # Convert face image for display
         face_img = cv2.cvtColor(face_data['img'], cv2.COLOR_BGR2RGB)
+        face_img = cv2.resize(face_img, (250, 250))
         img = Image.fromarray(face_img)
-        img = img.resize((250, 250), Image.Resampling.LANCZOS)
         photo = ImageTk.PhotoImage(img)
         
         ttk.Label(dialog, text="New Customer Registration", 
@@ -725,6 +839,9 @@ class JewelryShopDashboard:
         def register():
             name = name_var.get().strip()
             if name:
+                # Extract features before registration
+                face_features = self.extract_face_features(face_data['img'])
+                face_data['features'] = face_features
                 self.register_face(face_data, name)
                 dialog.destroy()
                 self.registration_dialog = None
