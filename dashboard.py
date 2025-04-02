@@ -1234,8 +1234,8 @@ class JewelryShopDashboard:
                     self.view_image(product_image)
                 elif column == '#9' and records_tree.item(item, 'values')[8] == "Generate":
                     customer_id = records[records_tree.index(item)][0]
-                    product_image = records[records_tree.index(item)][7]
-                    self.generate_image_from_gradio(product_image)
+                    product_id = records[records_tree.index(item)][4]  # Fetch the Product ID
+                    self.generate_image_from_gradio(product_id)
             
             records_tree.tag_configure('has_image', foreground='blue')
             records_tree.bind('<Button-1>', on_tree_click)
@@ -1250,24 +1250,28 @@ class JewelryShopDashboard:
             messagebox.showerror("Error", f"Failed to show past records: {e}")
             print(f"Past records error: {e}")
 
-    def generate_image_from_gradio(self, image_data):
-        """Redirect to Hugging Face Space with the purchased image"""
+    def generate_image_from_gradio(self, product_id):
+        """Fetch product image based on product ID and redirect to Gradio with the image"""
         try:
-            if not image_data:
-                raise ValueError("No image data provided")
-            print(f"Image data type: {type(image_data)}, length: {len(image_data)}")
+            # Map product ID to local image filename
+            # Strip leading zeros from the numeric part of the product ID
+            image_number = int(product_id[1:])  # Convert '002' to 2
+            image_filename = f"jewel{image_number}.jpg"  # Convert to 'jewel2.jpg'
+            image_path = os.path.join("C:\\Users\\aritt\\OneDrive\\Desktop\\Jewelry", image_filename)
 
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
-                temp_path = temp_file.name
-                temp_file.write(image_data)
+            # Check if the image file exists
+            if not os.path.exists(image_path):
+                raise FileNotFoundError(f"Image file not found: {image_path}")
 
-            huggingface_url = "http://127.0.0.1:7860/"
-            webbrowser.open(huggingface_url)
+            # Open the Gradio app in the browser
+            gradio_url = "http://127.0.0.1:7860/"
+            webbrowser.open(gradio_url)
 
+            # Inform the user about the image location
             messagebox.showinfo(
                 "Redirecting",
-                f"The browser has been opened to {huggingface_url}.\n"
-                f"Please manually upload the image located at:\n{temp_path}"
+                f"The browser has been opened to {gradio_url}.\n"
+                f"Please manually upload the image located at:\n{image_path}"
             )
 
         except Exception as e:
